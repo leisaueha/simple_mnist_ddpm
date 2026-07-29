@@ -28,10 +28,24 @@ class DDPM:
         )
 
     @torch.no_grad()
-    def sample(self, model, shape, capture_steps=None):
-        """Run the reverse process, optionally retaining selected output steps."""
+    def sample(
+        self,
+        model,
+        shape,
+        labels=None,
+        guidance_scale=1.0,
+        capture_steps=None,
+    ):
+        """Run the reverse process with optional classifier-free guidance."""
         model.eval()
         x = torch.randn(shape, device=self.device)
+        if labels is not None:
+            labels = torch.as_tensor(
+                labels, device=self.device, dtype=torch.long
+            )
+            if labels.ndim != 1 or labels.size(0) != shape[0]:
+                raise ValueError("labels must have shape [batch_size]")
+        unconditional = labels is None or bool((labels == -1).all())
         capture_steps = set(capture_steps or [])
         frames = []
 
@@ -39,7 +53,16 @@ class DDPM:
             t = torch.full(
                 (shape[0],), step, device=self.device, dtype=torch.long
             )
-            predicted_noise = model(x, t)
+            if unconditional:
+                predicted_noise = model(x, t, labels)
+            elif guidance_scale == 1.0:
+                predicted_noise = model(x, t, labels)
+            else:
+                conditional_noise = model(x, t, labels)
+                unconditional_noise = model(x, t, None)
+                predicted_noise = unconditional_noise + guidance_scale * (
+                    conditional_noise - unconditional_noise
+                )
 
             alpha_t = self.alpha[step]
             alpha_bar_t = self.alpha_bar[step]

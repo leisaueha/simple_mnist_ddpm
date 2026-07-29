@@ -55,6 +55,15 @@ def save_animation(frames, path, fps=24):
         raise RuntimeError(f"ffmpeg failed to write {path}") from exc
 
 
+def parse_labels(value):
+    try:
+        return [int(label.strip()) for label in value.split(",")]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--labels must be comma-separated integers"
+        ) from exc
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="checkpoints/mnist_ddpm.pt")
@@ -62,6 +71,22 @@ def main():
     parser.add_argument("--out-dir", type=Path, default=Path("samples"))
     parser.add_argument("--save-animation", action="store_true")
     parser.add_argument("--animation-seconds", type=float, default=5.0)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="random seed for reproducible sampling",
+    )
+    parser.add_argument(
+        "--labels",
+        type=parse_labels,
+        help="comma-separated classes to repeat (default: unconditional)",
+    )
+    parser.add_argument(
+        "--guidance-scale",
+        type=float,
+        default=2.0,
+        help="0 is unconditional, 1 is conditional, >1 strengthens the class",
+    )
     args = parser.parse_args()
 
     if args.num_images < 1:
@@ -69,13 +94,40 @@ def main():
     if args.animation_seconds <= 0:
         parser.error("--animation-seconds must be greater than 0")
 
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     device = get_device()
     checkpoint = torch.load(args.checkpoint, map_location=device)
 
-    model = SimpleUNet().to(device)
+    num_classes = checkpoint.get("num_classes")
+    model = SimpleUNet(num_classes=num_classes).to(device)
     model.load_state_dict(checkpoint["model"])
+    labels = None
+    if num_classes is None:
+        if args.labels is not None:
+            parser.error("--labels requires a classifier-free checkpoint")
+        if args.guidance_scale != 2.0:
+            parser.error("--guidance-scale requires a classifier-free checkpoint")
+    else:
+        if args.labels is None:
+            labels = torch.full(
+                (args.num_images,), -1, device=device, dtype=torch.long
+            )
+        else:
+            if not args.labels:
+                parser.error("--labels cannot be empty")
+            if any(label < 0 or label >= num_classes for label in args.labels):
+                parser.error(f"--labels must be between 0 and {num_classes - 1}")
+            labels = torch.tensor(
+                [
+                    args.labels[index % len(args.labels)]
+                    for index in range(args.num_images)
+                ],
+                device=device,
+            )
 
     diffusion = DDPM(
         timesteps=checkpoint["timesteps"],
@@ -92,6 +144,8 @@ def main():
     result = diffusion.sample(
         model,
         shape=(args.num_images, 1, 28, 28),
+        labels=labels,
+        guidance_scale=args.guidance_scale,
         **sample_args,
     )
     if args.save_animation:
