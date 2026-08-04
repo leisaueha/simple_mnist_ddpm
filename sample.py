@@ -68,6 +68,25 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="checkpoints/mnist_ddpm.pt")
     parser.add_argument("--num-images", type=int, default=8)
+    parser.add_argument(
+        "--num-steps",
+        type=int,
+        default=1000,
+        help="number of DDPM or DDIM denoising steps (default: 1000)",
+    )
+    parser.add_argument("--eta", type=float, default=0.0)
+    parser.add_argument("--ddim", action="store_true", help="use DDIM sampling")
+    parser.add_argument(
+        "--interpolation",
+        action="store_true",
+        help="denoise latent pairs and their midpoints as a comparison grid",
+    )
+    parser.add_argument(
+        "--num-interpolations",
+        type=int,
+        default=1,
+        help="number of latent pairs in an interpolation grid (default: 1)",
+    )
     parser.add_argument("--out-dir", type=Path, default=Path("samples"))
     parser.add_argument("--save-animation", action="store_true")
     parser.add_argument("--animation-seconds", type=float, default=5.0)
@@ -91,6 +110,18 @@ def main():
 
     if args.num_images < 1:
         parser.error("--num-images must be at least 1")
+    if args.num_steps < 1:
+        parser.error("--num-steps must be at least 1")
+    if args.num_interpolations < 1:
+        parser.error("--num-interpolations must be at least 1")
+    if args.num_interpolations != 1 and not args.interpolation:
+        parser.error("--num-interpolations requires --interpolation")
+    if args.eta < 0:
+        parser.error("--eta must be non-negative")
+    if args.eta != 0 and not args.ddim:
+        parser.error("--eta only applies when --ddim is set")
+    if args.interpolation and not args.ddim:
+        parser.error("--interpolation requires --ddim")
     if args.animation_seconds <= 0:
         parser.error("--animation-seconds must be greater than 0")
 
@@ -105,6 +136,11 @@ def main():
     num_classes = checkpoint.get("num_classes")
     model = SimpleUNet(num_classes=num_classes).to(device)
     model.load_state_dict(checkpoint["model"])
+    sample_count = (
+        3 * args.num_interpolations
+        if args.interpolation
+        else args.num_images
+    )
     labels = None
     if num_classes is None:
         if args.labels is not None:
@@ -114,7 +150,7 @@ def main():
     else:
         if args.labels is None:
             labels = torch.full(
-                (args.num_images,), -1, device=device, dtype=torch.long
+                (sample_count,), -1, device=device, dtype=torch.long
             )
         else:
             if not args.labels:
@@ -124,7 +160,7 @@ def main():
             labels = torch.tensor(
                 [
                     args.labels[index % len(args.labels)]
-                    for index in range(args.num_images)
+                    for index in range(sample_count)
                 ],
                 device=device,
             )
@@ -133,17 +169,37 @@ def main():
         timesteps=checkpoint["timesteps"],
         device=device,
     )
+    if args.num_steps > diffusion.timesteps:
+        parser.error(
+            "--num-steps cannot exceed the checkpoint timestep count "
+            f"({diffusion.timesteps})"
+        )
 
     sample_args = {}
     if args.save_animation:
         frame_count = max(1, round(args.animation_seconds * 24))
         sample_args["capture_steps"] = torch.linspace(
-            0, diffusion.timesteps - 1, frame_count
+            0, args.num_steps - 1, frame_count
         ).round().long().tolist()
 
-    result = diffusion.sample(
+    if args.interpolation:
+        endpoints = torch.randn(
+            (args.num_interpolations, 2, 1, 28, 28), device=device
+        )
+        midpoint = (endpoints[:, 0] + endpoints[:, 1]) / 2.0
+        # Row-major ordering produces rows [z1, z2, midpoint], with one
+        # interpolation experiment per column.
+        sample_args["initial_noise"] = torch.cat(
+            (endpoints[:, 0], endpoints[:, 1], midpoint), dim=0
+        )
+
+    sampler = diffusion.sample_ddim if args.ddim else diffusion.sample
+    sample_args["num_steps"] = args.num_steps
+    if args.ddim:
+        sample_args["eta"] = args.eta
+    result = sampler(
         model,
-        shape=(args.num_images, 1, 28, 28),
+        shape=(sample_count, 1, 28, 28),
         labels=labels,
         guidance_scale=args.guidance_scale,
         **sample_args,
@@ -155,7 +211,11 @@ def main():
 
     # Convert [-1, 1] back to [0, 1].
     images = (images + 1.0) / 2.0
-    nrow = max(1, math.ceil(math.sqrt(args.num_images)))
+    nrow = (
+        args.num_interpolations
+        if args.interpolation
+        else max(1, math.ceil(math.sqrt(sample_count)))
+    )
     grid_path = args.out_dir / "grid.png"
     save_image(images.cpu(), grid_path, nrow=nrow)
 
