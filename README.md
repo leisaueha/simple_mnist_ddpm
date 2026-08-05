@@ -128,7 +128,7 @@ in the checkpoint. It respaces either the DDPM or DDIM sampling schedule.
 Increasing `--eta` makes DDIM stochastic, while `0` uses its deterministic
 update.
 
-To compare DDIM latent endpoints with their linear midpoint interpolations:
+To compare latent endpoints with their linear midpoint interpolations:
 
 ```bash
 python sample.py --ddim --num-steps 50 --interpolation \
@@ -198,51 +198,62 @@ python combine_results.py --columns 2 \
   --output ddim_vs_ddpm/comparisons/ddpm_vs_ddim_10_steps.png
 ```
 
-Compare DDIM stochasticity at 10 steps:
+Compare DDIM stochasticity at 5 steps:
 
 ```bash
 for eta in 0 0.25 0.5 0.75 1; do
   python sample.py --checkpoint checkpoints/mnist_ddpm.pt --num-images 64 \
-    --ddim --num-steps 10 --eta "$eta" --seed 2026 \
-    --out-dir "ddim_vs_ddpm/ddim_10_steps_eta_${eta}"
+    --ddim --num-steps 5 --eta "$eta" --seed 2026 \
+    --out-dir "ddim_vs_ddpm/ddim_5_steps_eta_${eta}"
 done
 python combine_results.py --columns 3 \
-  --item "eta=0=ddim_vs_ddpm/ddim_10_steps_eta_0/grid.png" \
-  --item "eta=0.25=ddim_vs_ddpm/ddim_10_steps_eta_0.25/grid.png" \
-  --item "eta=0.5=ddim_vs_ddpm/ddim_10_steps_eta_0.5/grid.png" \
-  --item "eta=0.75=ddim_vs_ddpm/ddim_10_steps_eta_0.75/grid.png" \
-  --item "eta=1=ddim_vs_ddpm/ddim_10_steps_eta_1/grid.png" \
+  --item "eta=0=ddim_vs_ddpm/ddim_5_steps_eta_0/grid.png" \
+  --item "eta=0.25=ddim_vs_ddpm/ddim_5_steps_eta_0.25/grid.png" \
+  --item "eta=0.5=ddim_vs_ddpm/ddim_5_steps_eta_0.5/grid.png" \
+  --item "eta=0.75=ddim_vs_ddpm/ddim_5_steps_eta_0.75/grid.png" \
+  --item "eta=1=ddim_vs_ddpm/ddim_5_steps_eta_1/grid.png" \
   --output ddim_vs_ddpm/comparisons/ddim_eta.png
 ```
 
-Compare deterministic DDIM across inference step counts:
+Compare stochastic DDPM and deterministic DDIM across inference step counts.
+The combined image places DDPM on the left and DDIM on the right for each step
+count:
 
 ```bash
 for steps in 10 50 100 250 500 1000; do
   python sample.py --checkpoint checkpoints/mnist_ddpm.pt --num-images 64 \
+    --num-steps "$steps" --seed 2026 \
+    --out-dir "ddim_vs_ddpm/ddpm_${steps}_steps"
+  python sample.py --checkpoint checkpoints/mnist_ddpm.pt --num-images 64 \
     --ddim --num-steps "$steps" --eta 0 --seed 2026 \
     --out-dir "ddim_vs_ddpm/ddim_${steps}_steps_eta_0"
 done
-python combine_results.py --columns 3 \
-  --item "10 steps=ddim_vs_ddpm/ddim_10_steps_eta_0/grid.png" \
-  --item "50 steps=ddim_vs_ddpm/ddim_50_steps_eta_0/grid.png" \
-  --item "100 steps=ddim_vs_ddpm/ddim_100_steps_eta_0/grid.png" \
-  --item "250 steps=ddim_vs_ddpm/ddim_250_steps_eta_0/grid.png" \
-  --item "500 steps=ddim_vs_ddpm/ddim_500_steps_eta_0/grid.png" \
-  --item "1000 steps=ddim_vs_ddpm/ddim_1000_steps_eta_0/grid.png" \
-  --output ddim_vs_ddpm/comparisons/ddim_steps.png
+items=()
+for steps in 10 50 100 250 500 1000; do
+  items+=(
+    --item "$steps-step DDPM=ddim_vs_ddpm/ddpm_${steps}_steps/grid.png"
+    --item "$steps-step DDIM=ddim_vs_ddpm/ddim_${steps}_steps_eta_0/grid.png"
+  )
+done
+python combine_results.py --columns 2 "${items[@]}" \
+  --output ddim_vs_ddpm/comparisons/ddpm_vs_ddim_steps.png
 ```
 
-Generate an unconditional interpolation strip from two random latents and
-their midpoint:
+Generate matching unconditional interpolation grids with DDPM and DDIM, then
+combine them for comparison. The shared seed gives both samplers the same
+latent endpoint pairs:
 
 ```bash
+python sample.py --checkpoint checkpoints/mnist_ddpm.pt \
+  --num-steps 10 --interpolation --num-interpolations 12 --seed 2026 \
+  --out-dir ddim_vs_ddpm/ddpm_interpolation_10_steps
 python sample.py --checkpoint checkpoints/mnist_ddpm.pt --ddim \
   --num-steps 10 --eta 0 --interpolation --num-interpolations 12 --seed 2026 \
   --out-dir ddim_vs_ddpm/ddim_interpolation_10_steps
-python combine_results.py --columns 1 \
-  --item "Rows: endpoint 1, endpoint 2, midpoint=ddim_vs_ddpm/ddim_interpolation_10_steps/grid.png" \
-  --output ddim_vs_ddpm/comparisons/ddim_interpolation.png
+python combine_results.py --columns 2 \
+  --item "10-step DDPM; rows: endpoint 1, endpoint 2, midpoint=ddim_vs_ddpm/ddpm_interpolation_10_steps/grid.png" \
+  --item "10-step DDIM; rows: endpoint 1, endpoint 2, midpoint=ddim_vs_ddpm/ddim_interpolation_10_steps/grid.png" \
+  --output ddim_vs_ddpm/comparisons/ddpm_vs_ddim_interpolation.png
 ```
 
 No `--labels` argument is passed in these experiments, so the checkpoint's

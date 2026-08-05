@@ -120,8 +120,6 @@ def main():
         parser.error("--eta must be non-negative")
     if args.eta != 0 and not args.ddim:
         parser.error("--eta only applies when --ddim is set")
-    if args.interpolation and not args.ddim:
-        parser.error("--interpolation requires --ddim")
     if args.animation_seconds <= 0:
         parser.error("--animation-seconds must be greater than 0")
 
